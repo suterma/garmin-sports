@@ -18,32 +18,29 @@ module.exports = {
 };
 
 //Creates FIT Message Field Definition
-function FieldDefinition(fieldDefinitionByteZero, fieldDefinitionByteOne, fieldDefinitionByteTwo) {
+function FieldDefinition(byteZero, byteOne, byteTwo) {
     var fieldDefinition = new Object();
-    fieldDefinition.fieldDefinitionNumber = fieldDefinitionByteZero;
-    fieldDefinition.size = fieldDefinitionByteOne;
-    fieldDefinition.baseType = fieldDefinitionByteTwo;
+    fieldDefinition.fieldDefinitionNumber = byteZero;
+    fieldDefinition.size = byteOne;
+    fieldDefinition.baseType = byteTwo;
     return fieldDefinition;
 }
-
+//Creates FIT Developer Data Field Description
+function DeveloperFieldDescription(byteZero, byteOne, byteTwo) {
+    var developerFieldDescription = new Object();
+    developerFieldDescription.fieldNumber = byteZero;//Maps to the field_definition_number of a field_description Message
+    developerFieldDescription.size = byteOne;//Size (in bytes) of the specified FIT message’s field
+    developerFieldDescription.developerDataIndex = byteTwo;//Maps to the developer_data_index of a developer_data_id Message
+    return developerFieldDescription;
+}
 
 /*
-* Extracts the FIT file records from a complete FIT file
-* data: The raw file content as Uint8Array
-* header: The already parsed header from the FIT file
+* Extracts a single FIT file record from a DataView of a complete FIT file data buffer.
+* dataView: a DataView of the complete FIT file data buffer.
+* pos: The current reading position in the dataView
 */
-function FileRecords(data, header) {
-
-    //Convert the file content part (skipping the header) to an ArrayBuffer for convenient reading with a DataView instance
-    var arrayBuffer = data.buffer.slice(header.headerSize, data.byteLength);
-    var dv = new DataView(arrayBuffer);
-
-    //start at first record.
-    var pos = 0;
-
-    //TODO use some loop
-    //Read one record
-    //TODO use some array type
+function FileRecord(dv, pos) {
+    var initialPos = pos;
     var record = new Object();
     recordHeaderByte = dv.getUint8(pos); pos += 1;
     //console.log("recordHeaderByte: " + recordHeaderByte);
@@ -69,20 +66,79 @@ function FileRecords(data, header) {
         record.reserved = dv.getUint8(pos); pos += 1;//0 by default
         record.architecture = dv.getUint8(pos); pos += 1; //0: Definition and Data Messages are Little Endian 1: Definition and Data Message are Big Endian
         record.globalMessageNumber = dv.getUint16(pos); pos += 2; //0:65535 – Unique to each message. Endianness of this 2 Byte value is defined in the Architecture byte
-        record.numberOfFields = dv.getUint8(pos); pos += 1; //Number of fields in the Data Message
+        record.numberOfFields = dv.getUint8(pos); pos += 1; //Number of fields in the Definition Message
         //read field definitions
         record.fieldDefinition = new Array(record.numberOfFields);
         for (var i = 0; i < record.numberOfFields; i++) {
-            var fieldDefinitionByteZero = dv.getUint8(pos); pos += 1;
-            var fieldDefinitionByteOne = dv.getUint8(pos); pos += 1;
-            var fieldDefinitionByteTwo = dv.getUint8(pos); pos += 1;
-            record.fieldDefinition[i] = new FieldDefinition(fieldDefinitionByteZero, fieldDefinitionByteOne, fieldDefinitionByteTwo);
+            var byteZero = dv.getUint8(pos); pos += 1;
+            var byteOne = dv.getUint8(pos); pos += 1;
+            var byteTwo = dv.getUint8(pos); pos += 1;
+            record.fieldDefinition[i] = new FieldDefinition(byteZero, byteOne, byteTwo);
         }
 
-        //TODO read/skip developer fields
+        //Definition message with Developer fields
+        if(record.messageTypeSpecific === 1)
+        {
+            record.numberOfDeveloperFields = dv.getUint8(pos); pos += 1; //Number of developer fields in the Definition Message
+            //read developer field definitions
+            record.developerFieldDefinition = new Array(record.numberOfDeveloperFields);
+            for (var i = 0; i < record.numberOfFields; i++) {
+                var byteZero = dv.getUint8(pos); pos += 1;
+                var byteOne = dv.getUint8(pos); pos += 1;
+                var byteTwo = dv.getUint8(pos); pos += 1;
+                record.developerFieldDefinition[i] = new DeveloperFieldDescription(byteZero, byteOne, byteTwo);
+            }            
+        }
     }
-    //else Data Message
+    else // Data Message
+    {
+        //TODO implement
+        //TOOD currently skip over data, according to the field definitions
+        
+        //TODO currently, in the test file, the current field definition is just 2 field with total size 3 bytes
+        pos += 3;
+        record.numberOfDataFields = 2;
+        record.dataFields = new Array(record.numberOfDataFields);
+          for (var i = 0; i < record.numberOfDataFields; i++) {
+            record.dataFields[i] = "test//TODO";
+        }      
+        
+    }   
+    //calculate record lenght (for reading convenience)
+    record.rawByteLength = pos - initialPos; 
     return record;
+}
+
+
+/*
+* Extracts the FIT file records from a complete FIT file
+* data: The raw file content as Uint8Array
+* header: The already parsed header from the FIT file
+*/
+function FileRecords(data, header) {
+    //Convert the file content part (skipping the header) to an ArrayBuffer for convenient reading with a DataView instance
+    var arrayBuffer = data.buffer.slice(header.headerSize, data.byteLength);
+    var dv = new DataView(arrayBuffer);
+
+    //start at first record
+    var records = new Array();
+    var pos = 0;
+
+
+    //use some loop with realistic condition, not just this test variable
+    //From definition messages, build up a dictionary of local message types with their definitions
+    //This dictionary can then be used for parsing data messages
+    //TODO continue here
+    while (pos < 13+4)//header.dataSize)
+    {   
+        //TODO use some array type
+        var record = new FileRecord(dv, pos);
+        //advance the position (is not autmatically done by DataView)
+        pos += record.rawByteLength;
+        
+        records.push(record);       
+    }
+    return records;
 }
 
 /*

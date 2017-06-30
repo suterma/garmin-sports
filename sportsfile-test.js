@@ -3,6 +3,7 @@
 */
 var fs = require('fs');
 require('buffer');
+const util = require('util')
 
 var fitTypes = require('./fitTypes');
 
@@ -22,5 +23,5 @@ function parseFitFile(err, data) {
     console.log(fileHeader);
 
     var records = fitTypes.CreateFileRecords(data, fileHeader);
-    console.log(records);
+    console.log(util.inspect(records, {showHidden: false, depth: null}))
 }
