@@ -3,6 +3,7 @@
 */
 var fs = require('fs');
 require('buffer');
+require('text-encoding');
 const util = require('util')
 
 var fitTypes = require('./fitTypes');
@@ -18,10 +19,7 @@ function parseFitFile(err, data) {
     if (err !== null) {
         throw err;
     }
-
-    var fileHeader = fitTypes.CreateFileHeader(data);
-    console.log(fileHeader);
-
-    var records = fitTypes.CreateFileRecords(data, fileHeader);
-    console.log(util.inspect(records, {showHidden: false, depth: null}))
+    
+    var fitFile = fitTypes.ParseFitFile(data);
+    console.log(util.inspect(fitFile, {showHidden: false, depth: null}))
 }

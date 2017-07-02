@@ -1,21 +1,32 @@
 // File fitTypes.js
+
+var textEncoding = require('text-encoding'); var TextDecoder = textEncoding.TextDecoder;
+
 module.exports = {
     /*
-* Extracts the FIT file header from a complete FIT file
-* data: The raw file content as Uint8Array
-*/
-    CreateFileHeader: function (data) {
-        return new FileHeader(data);
-    },
-    /*
-    * Extracts the FIT file records from a complete FIT file
+    * Parses a complete raw FIT file.
     * data: The raw file content as Uint8Array
-    * header: The already parsed header from the FIT file
     */
-    CreateFileRecords: function (data, header) {
-        return new FileRecords(data, header);
-    }
+    ParseFitFile(data) {
+        return new FitFile(data);
+    }    
 };
+
+//FIT Global definitions
+FLAG_BIT_0 = 1;   // 00000001
+FLAG_BIT_1 = 2;   // 00000010
+FLAG_BIT_2 = 4;   // 00000100
+FLAG_BIT_3 = 8;   // 00001000
+FLAG_BIT_4 = 16;  // 00010000
+FLAG_BIT_5 = 32;  // 00100000
+FLAG_BIT_6 = 64;  // 01000000
+FLAG_BIT_7 = 128; // 10000000
+
+MESSAGETYPE_DefinitionMessage = 1;
+MESSAGETYPE_DataMessage = 0;
+
+    
+    
 
 //Creates FIT Message Field Definition
 function FieldDefinition(byteZero, byteOne, byteTwo) {
@@ -39,30 +50,19 @@ function DeveloperFieldDescription(byteZero, byteOne, byteTwo) {
 * dataView: a DataView of the complete FIT file data buffer.
 * pos: The current reading position in the dataView
 */
-function FileRecord(dv, pos) {
+function FitRecord(dv, fitDefinitions, pos) {
     var initialPos = pos;
     var record = new Object();
     recordHeaderByte = dv.getUint8(pos); pos += 1;
     //console.log("recordHeaderByte: " + recordHeaderByte);
-
-    var FLAG_BIT_0 = 1;   // 00000001
-    var FLAG_BIT_1 = 2;   // 00000010
-    var FLAG_BIT_2 = 4;   // 00000100
-    var FLAG_BIT_3 = 8;   // 00001000
-    var FLAG_BIT_4 = 16;  // 00010000
-    var FLAG_BIT_5 = 32;  // 00100000
-    var FLAG_BIT_6 = 64;  // 01000000
-    var FLAG_BIT_7 = 128; // 10000000
-
     record.normalHeader = (recordHeaderByte & FLAG_BIT_7) / FLAG_BIT_7; // Value 0 is Normal Header
     record.messageType = (recordHeaderByte & FLAG_BIT_6) / FLAG_BIT_6; // 1: Definition Message 0: Data Message
     record.messageTypeSpecific = (recordHeaderByte & FLAG_BIT_5) / FLAG_BIT_5; //Value 0 is default
     record.reserved = (recordHeaderByte & FLAG_BIT_4) / FLAG_BIT_4;
     record.localMessageType = recordHeaderByte % 16; //Bits 0 thru 3, Local Message Type, Value ranges from 0 to 15;
-
+    
     //Create a record according to the  message type
-    //Definiton Message
-    if (record.messageType === 1) {
+    if (record.messageType === MESSAGETYPE_DefinitionMessage) {
         record.reserved = dv.getUint8(pos); pos += 1;//0 by default
         record.architecture = dv.getUint8(pos); pos += 1; //0: Definition and Data Messages are Little Endian 1: Definition and Data Message are Big Endian
         record.globalMessageNumber = dv.getUint16(pos); pos += 2; //0:65535 – Unique to each message. Endianness of this 2 Byte value is defined in the Architecture byte
@@ -89,23 +89,54 @@ function FileRecord(dv, pos) {
                 record.developerFieldDefinition[i] = new DeveloperFieldDescription(byteZero, byteOne, byteTwo);
             }            
         }
+        
+            //Keep this definiton message for further use (See Section 4.1.1.4 in the SKD doc for how to match data messages to definition messages)
+            fitDefinitions[record.localMessageType] = record;
     }
-    else // Data Message
-    {
-        //TODO implement
-        //TOOD currently skip over data, according to the field definitions
+    else if (record.messageType === MESSAGETYPE_DataMessage)        {
+        var associatedDefinition = fitDefinitions[record.localMessageType];
         
-        //TODO currently, in the test file, the current field definition is just 2 field with total size 3 bytes
-        pos += 3;
-        record.numberOfDataFields = 2;
+        record.numberOfDataFields = associatedDefinition.numberOfFields;
         record.dataFields = new Array(record.numberOfDataFields);
-          for (var i = 0; i < record.numberOfDataFields; i++) {
-            record.dataFields[i] = "test//TODO";
-        }      
         
+        for (var i = 0; i < record.numberOfDataFields; i++) {
+            var associatedFieldDefinition = associatedDefinition.fieldDefinition[i];
+            
+            var dataField = new Object();
+            dataField.fieldDefinitionNumber = associatedFieldDefinition.fieldDefinitionNumber;
+            dataField.size = associatedFieldDefinition.size;
+            dataField.baseType = associatedFieldDefinition.baseType;
+            
+            //Read Value, according to the Base Type, as specified in
+            //Chapter 4.2.1.4.3 Base Type, D00001275 Flexible & Interoperable Data Transfer (FIT) Protocol Rev 2.3.pdf
+            //Note, only SOME types are supported here
+            //TODO continue here with implementing all currently needed types
+            if (dataField.baseType === 7) //Null terminated string encoded in UTF-8 format
+            {
+                var uint8array = new Uint8Array(dv.buffer, pos, dataField.size);
+                var stringValue = new TextDecoder("utf-8").decode(uint8array);
+                dataField.value = stringValue;
+            }
+            else if (dataField.size === 1)
+            {
+                dataField.value = dv.getUint8(pos);
+            } else if (dataField.size === 2)
+            {
+                dataField.value = dv.getUint16(pos);
+            } else if (dataField.size === 4)
+            {
+                dataField.value = dv.getUint32(pos); 
+            }
+            else{
+                dataField.value = "Unsupported Data type encountered.";
+            }
+             pos += dataField.size;
+            
+            record.dataFields[i] = dataField;
+        }
     }   
     //calculate record lenght (for reading convenience)
-    record.rawByteLength = pos - initialPos; 
+    record.rawByteLength = pos - initialPos;     
     return record;
 }
 
@@ -115,10 +146,13 @@ function FileRecord(dv, pos) {
 * data: The raw file content as Uint8Array
 * header: The already parsed header from the FIT file
 */
-function FileRecords(data, header) {
+function FitFileDataRecords(data, header) {
     //Convert the file content part (skipping the header) to an ArrayBuffer for convenient reading with a DataView instance
     var arrayBuffer = data.buffer.slice(header.headerSize, data.byteLength);
     var dv = new DataView(arrayBuffer);
+    
+    //Keep a dictionary of all encoutered FIT definition messages at hand, to allow subsequent parsing of corresponding data messages.
+    var fitDefinitions = new Array();
 
     //start at first record
     var records = new Array();
@@ -129,14 +163,14 @@ function FileRecords(data, header) {
     //From definition messages, build up a dictionary of local message types with their definitions
     //This dictionary can then be used for parsing data messages
     //TODO continue here
-    while (pos < 13+4)//header.dataSize)
+    while (pos < header.dataSize)
     {   
-        //TODO use some array type
-        var record = new FileRecord(dv, pos);
+        var record = new FitRecord(dv, fitDefinitions, pos);
+        records.push(record);      
+        
         //advance the position (is not autmatically done by DataView)
         pos += record.rawByteLength;
         
-        records.push(record);       
     }
     return records;
 }
@@ -145,7 +179,7 @@ function FileRecords(data, header) {
 * Extracts the FIT file header from a complete FIT file
 * data: The raw file content as Uint8Array
 */
-function FileHeader(data) {
+function FitFileHeader(data) {
     var header = new Object();
     //Convert to ArrayBuffer for convenient reading with a DataView instance
     var arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
@@ -172,3 +206,30 @@ function FileHeader(data) {
     else header.CRC = 0;
     return header;
 }
+
+/*
+* Extracts a FIT file object from a complete raw file
+* data: The raw file content as Uint8Array
+*/
+function FitFile(data) {
+    var fitFile = new Object();
+    var header = new FitFileHeader(data);
+    var dataRecords = new FitFileDataRecords(data, header);
+    var crc = new FitFileCrc(data);
+    fitFile.header = header;
+    fitFile.dataRecords = dataRecords;
+    fitFile.crc = crc;
+    fitFile.rawData = data;
+    return fitFile;    
+}
+
+/*
+* Calculates a two-byte CRC out of the given data
+* data: The raw data Uint8Array
+*/
+function FitFileCrc(data) {
+    //TODO implement
+    return 0;   
+}
+
+
